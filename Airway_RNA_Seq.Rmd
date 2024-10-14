@@ -1,0 +1,785 @@
+---
+title: "Airway Smooth Muscle Cells DGE"
+author: "Damilola A"
+output: 
+  html_document:
+    toc: true
+    code_folding: hide
+    toc_float:
+      collapsed: true
+    highlight: textmate
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  warning = FALSE,
+  error = FALSE,
+  message = FALSE
+)
+```
+
+## **1. About Airway Data**
+
+Airway data is a RangedSummarizedExperiment object containing count data and sample information. It consists of RNA-seq data from human airway smooth muscle cells. These cells were treated with a glucocorticoid drug called Dexamethasone, commonly used for its anti-inflammatory effects. The dataset contains measurements of gene expression levels under two conditions: treated and untreated with Dexamethasone.
+
+-   **assays**: contains the count data (gene expression counts).
+-   **colData**: contains the metadata associated with each sample (columns).
+
+#### Loading Necessary Libraries
+
+```{r}
+library(airway)
+library(SummarizedExperiment) #Used when data are summarised as a package
+library(DESeq2)
+library(tidyverse)
+library(clusterProfiler)
+library(enrichplot) #For enrichment plot
+library(RColorBrewer)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+library(pheatmap)
+library(remotes) #For gene annotation from github
+library(annotables)
+
+```
+
+```{r}
+#Exploring the summarized dataset
+#?airway
+#vignette("airway")
+```
+
+```{r}
+data("airway")
+```
+
+1.  **`rowData(airway)`**:
+
+    -   This function retrieves the metadata associated with each row (typically representing genes) in the `airway`dataset. This metadata might include gene identifiers, gene symbols, annotations, and other relevant information about each feature (e.g., genes or transcripts) in the dataset.
+
+    -   Essentially, `rowData(airway)` provides descriptive information about the rows of the dataset.
+
+**`assay(airway)`**:
+
+-   This function accesses the actual expression data matrix from the `airway` dataset. In this matrix, rows correspond to features (such as genes), and columns correspond to samples. Each cell in this matrix contains the expression level (e.g., counts) of a particular gene in a particular sample.
+
+-   In other words, `assay(airway)` provides the numerical data of gene expression levels measured across different samples.
+
+**Count Data**
+
+```{r}
+# Extracts count data and summarises basic statistics
+count_data <- assay(airway)   
+summary(colSums(count_data)/1e6)
+```
+
+```{r}
+class(count_data) #This is a matrix
+
+```
+
+**Meta Data or Sample info of the Airway dataset**
+
+This is the design matrix The 'dex' variable indicates if the cells were treated with dexamethasone colData(airway)
+
+```{r}
+class(colData(airway))
+```
+
+Shows the metadata is a DFRAME. A DFrame is a class from the S4Vectors package in R, specifically designed to handle data frames with support for additional features such as row names and various kinds of metadata.
+
+```{r}
+sample_info <- as.data.frame(colData(airway)) # Extract sample information as matrix
+class(sample_info)
+```
+
+as.data.frame(...): This function converts the DFrame object into a standard R data.frame for effective exploration
+
+**Ensuring Rownames of Meta Data as same as Column Names of Count Data**
+
+```{r}
+all(rownames(sample_info)==colnames(count_data))
+```
+
+## 2. Differential Gene Analysis Preparation
+
+**Step 1: Creating DESeq Object**
+
+`DESeqDataSet` is mostly used to create this object because the raw count is a Summarized Experiment. If otherwise, `DESeqDataSetFromMatrix` is used
+
+Trying both methods
+
+```{r echo=TRUE, message=FALSE}
+deg_object <- DESeqDataSet(airway, design = ~ cell + dex)
+
+```
+
+```{r}
+deg <- DESeqDataSetFromMatrix(countData = count_data,
+                              colData = sample_info,
+                              design = ~ dex)
+```
+
+**Step 2: Normalization**
+
+Normalization ensures counts can be compared across samples. DESeq2 automatically computes size factors, representing the total number of reads per sample, and scales the counts accordingly.
+
+**Size Factor Calculation**
+
+The size factor is computed using the **median-of-ratios** method:
+
+-   **Geometric Mean Calculation**: For each gene, the geometric mean of its counts across all samples is calculated.
+
+-   **Ratio Calculation**: Each gene’s count in a sample is divided by its geometric mean.
+
+-   **Median-of-Ratios**: The median of these ratios for each sample becomes the size factor.
+
+-   **Normalization**: Raw counts are divided by their size factors, making them comparable across samples.
+
+```{r}
+deg <- estimateSizeFactors(deg)
+normalized_counts <- counts(deg, normalized=TRUE)
+```
+
+**Size Factor Output**
+
+```{r}
+sizeFactors(deg)
+```
+
+**Method for Direct Normalization Using `DESeq()`**
+
+The `DESeq()` function automatically performs the following steps for differential expression testing:
+
+1.  **Normalization**: Size factors are automatically calculated and applied to raw counts.
+
+2.  **Dispersion Estimation**: A dispersion model is fitted to normalized counts.
+
+3.  **Negative Binomial Fitting**: The dispersion estimates are used to fit a negative binomial model.
+
+```{r}
+deq <- DESeq(deg_object)
+sizeFactors(deq)
+```
+
+```{r}
+#Normalized count from deseq2 perform
+norm_counts <- counts(deq)
+```
+
+Both methods yield identical size factors.
+
+```{r}
+#summary(norm_counts)
+```
+
+### **Filtering out Genes with less Counts**
+
+First, check for the number of genes with counts less than 10
+
+```{r}
+low_count_genes <- rowSums(norm_counts < 10)
+summary(low_count_genes)
+```
+
+The distribution of genes with counts below 10 shows a minimum of 0 (some genes definitely have counts of 10 or more in every sample), a first quartile of 4 (25% of genes have low counts in up to 4 samples), a median of 8 (50% of genes in at least 8 samples), a mean of 5.99 (average low counts in about 6 samples), a third quartile of 8 (75% of genes in up to 8 samples), and a maximum of 8 (some genes have low counts in all 8 samples).
+
+**Low Counts**: Many genes have counts below 10 in several samples. This indicates that a significant number of genes are expressed at very low levels across multiple samples, which might impact the sensitivity and accuracy of differential expression analysis.
+
+**Filtering out genes not up to 10 counts**
+
+```{r}
+# Pre-filtering to remove rows with fewer than 10 counts
+deq <-deq[rowSums(counts(deq)) > 10, ]
+```
+
+**`rowSums(counts(deq)) > 10`**: This computes the sum of counts for each gene across all samples. If a gene has a total count of 10 or less, it is considered low-expressed. By filtering out these low-count genes, the likelihood of identifying genes that have meaningful expression changes increases.
+
+## 3. Quality Control and Visual Exploration of Samples using PCA and Correlation Heatmap
+
+1\. **Unsupervised Hierachical Clustering with heatmap using Regularized Log Transformation or Variance Stabilizing Transformation**
+
+For unsupervised clustering, it's common to use transformed data to stabilize variance and make the data more suitable for clustering. Two common transformations are regularized log (rlog) and variance stabilizing transformation (VST), a log transformation that moderates the variance across the mean. This helps to improve the visuals of the clustering.
+
+```{r}
+# Apply VST transformation
+var_trans <- vst(deq, blind = TRUE) 
+#Object has already been normalised and blind is specified here to indicate normal exploratory visualisation (like training&testing data)
+
+## Alternatively, rlog transformation can be used
+#rld <- rlog(deg_object, blind = TRUE)
+```
+
+The vst transformation returns a transformed version of the deseq object. This transformation is useful for variance stabilization and is typically used for visualization or as input to other analysis steps.
+
+**Extracting VST-transformed normalized count as matrix**
+
+```{r echo=TRUE, message=FALSE}
+var_trans_matrix <- assay(var_trans)
+```
+
+**Pairwise correlation values for between samples checks**
+
+```{r}
+vsd_cor <- cor(var_trans_matrix)
+```
+
+**Visualizing the Correlation**
+
+```{r}
+annotation <- sample_info[, c("dex", "cell")]
+
+pheatmap(vsd_cor, annotation = annotation, #Annotates/label with dex from metadata
+         display_numbers = TRUE,  # This parameter shows the correlation values in the boxes
+         number_format = "%.2f",  # This formats the displayed numbers to 2 decimal places
+         fontsize_number = 10,
+         main = "Heatmap of sample correlation") #annotation selects which value to include as annotation bars
+```
+
+The heatmap shows no possible outliers as the correlation values are all quite close between 0.9 and 1.
+
+**Putting all the steps above together in one code from extracting matrix from "vst" to correlation between samples and then heatmap.**
+
+```{r echo=FALSE}
+var_trans%>%
+  assay()%>%
+  cor()%>% 
+  pheatmap(annotation = sample_info[, c("dex", "cell")],
+           display_numbers = TRUE,  # This parameter shows the correlation values in the boxes
+         number_format = "%.2f",  # This formats the displayed numbers to 2 decimal places
+         fontsize_number = 10,
+         main = "Heatmap of sample correlation")
+```
+
+**2. Principal Component Analysis Plot**
+
+PCA is performed to see how the samples cluster and whether the condition of interest corresponds with the principal components explaining the most variation in the data.
+
+```{r}
+plotPCA(var_trans, intgroup="dex")
+```
+
+The biological replicates tend to cluster together. The samples separate by dex (trt/untrt) on PC1. In the absence of this, there may be sources of variation present in our data and if these sources are present in our metadata, then we can explore these sources of variation by coloring the PCA by these factors.
+
+```{r}
+plotPCA(var_trans, intgroup="cell")
+```
+
+The **`cell`** column typically contains identifiers for different human airway smooth muscle cell lines, representing a distinct cell line. This distinction allows for the assessment of variability in gene expression not only between treated and untreated samples but also across different cell lines.
+
+## 4. Differential Expression Analysis
+
+### **Dispersion Estimate and Model Fitting**
+
+How well does the data fit to the Model?
+
+The normalized counts (adjusted by size factors) are used in the dispersion modeling. DESeq2 fits a model to the relationship between mean normalized counts and dispersion. The fitting process involves using a relationship between the mean expression level and the dispersion.
+
+**Local Regression:** A smooth curve (trend line) is fitted to the plot of mean normalized counts vs. dispersion estimates for each gene. This curve represents the expected dispersion at different mean expression levels.
+
+**Shrunken Estimates:** For each gene, an individual dispersion estimate is shrunk towards the trend line, balancing gene-specific information and the overall trend observed across all genes.
+
+Then, we plot the dispersion estimate
+
+```{r}
+plotDispEsts(deq)
+```
+
+Given the plot, the assumptions of DESeq2 are met since the dispersions tend to decrease with increasing mean and the raw dispersions seem to cluster around the maximum likelihood line. In other words, the trend line decreases as the mean expression increases: This pattern is typical and expected, indicating that DESeq2's assumption about dispersion decreasing with higher mean expression holds true for this dataset.
+
+**The higher the Mean, the lower the relative dispersion.**
+
+Most points fall near the trend line: This indicates a good fit, suggesting the model captures the general pattern of variability in the data. The dispersions are reasonable, and differential expression analysis should be reliable.
+
+#### Results Extraction and log2foldchange Shrinkage for Comparison of Interest (trt vs untrt)
+
+After exploring the dispersions and deciding the data fits the DESeq2 model well, the results is examined.
+
+```{r echo=TRUE, message=FALSE}
+results(deq, alpha = 0.05)
+```
+
+**Note:**
+
+Using `alpha=0.05` implies that there is a less than 5% probability that the observed difference is due to random chance. Using this threshold helps ensure that the identified genes are likely to be truly differentially expressed. It is used to control for false discovery rate.
+
+#### LOG-FOLD CHANGES
+
+#### What is Log Fold Change and why is it used?
+
+Log fold change (logFC) is a commonly used metric in biological and statistical analyses, especially in the context of gene expression studies like RNA-Seq. **It quantifies the change in expression levels of a gene between two conditions**, such as treated versus untreated, diseased versus healthy, or any other experimental comparison.
+
+**What is Fold Change (FC)**
+
+Fold change is the ratio of expression levels between two conditions. For example, if a gene has an expression level of 200 in Condition A and 100 in Condition B, the fold change is 200/100 = 2. This means the gene's expression is twice as high in Condition A as in Condition B. To make the scale of change easier to interpret and to handle a wide range of values (including very small values), the fold change is often transformed using the logarithm (commonly base 2).
+
+**Important Interpretations:**
+
+-   Positive values indicate upregulation (higher expression in the first condition).
+
+-   Negative values indicate downregulation (lower expression in the first condition).
+
+-   Zero indicates no change.
+
+**Main Advantages:**
+
+The **log scale provides symmetry, reduces skewness, and facilitates interpretation and statistical analysis.** Using log fold change helps to identify significant changes in gene expression more clearly and robustly, providing insights into biological mechanisms and pathways under different experimental conditions.
+
+Contrast can be used to specify the sample group to compare instead of default
+
+```{r echo=TRUE, message=FALSE}
+res <- results(deq, contrast = c("dex", "untrt", "trt"), alpha = 0.05) #treatment is used as baseline for comparison
+```
+
+This shows the percentage of genes that are up or down regulated using LFC threshold
+
+```{r echo=FALSE}
+summary(res)
+```
+
+**log fold change shrinkage**
+
+lfcShrink() function can be utilized to generate more accurate log2 foldchange estimates. It is used to shrink log2 fold changes to improve the fold change estimation of effect sizes and reduce variability. It helps to stabilize the estimates of fold changes, especially when they are based on small sample sizes or low counts.
+
+```{r}
+resultsNames(deq)
+```
+
+```{r}
+# Perform lfcShrink using the "apeglm" method, which is recommended for accurate LFC shrinkage
+resLFC <- lfcShrink(deq, contrast = c("dex", "untrt", "trt"), type = "normal", res = res) #res inherits the alpha value from res without shrinkage while Coefficients are numbered according to the order of the design formula.
+
+
+```
+
+```{r echo = FALSE}
+summary(resLFC)
+```
+
+The result of both process shows that Genes with a mean count less than 7 are considered low counts and overall, there is **No Difference in Results.**
+
+The outputs for both no shrinkage and shrinkage analyses are identical across all metrics. While LFC shrinkage is typically applied to stabilize estimates of LFC and control for outlier effects, the identical results suggest that either the shrinkage was minimal, or the gene expression data did not have extreme outliers that required adjustment.
+
+## 5. MA PLOT to visualize log fold change with and without shrinkage
+
+MA Plot is a plot of the log2 fold change (M) vs. the average expression (A) for each gene. Interpretation: Points above or below the horizontal line indicate up-regulated or down-regulated genes, respectively. The further from the line, the greater the change in expression.
+
+-   M stands for the log ratio (or "fold change") of expression between two conditions (e.g., treated vs. control).
+
+-   A stands for the average expression (or the mean) of counts for a gene across the two conditions. The plot is typically created after performing differential expression analysis, where each point represents a gene:
+
+The plot helps identify significant differential expression and patterns, providing insights into the overall behavior of genes across experimental conditions.
+
+```{r}
+# Plot an MA-plot with shrunken LFC
+plotMA(res, ylim = c(-7, 7), main="MA-plot without Shrinkage")
+
+```
+
+```{r}
+# Plot an MA-plot with shrunken LFC
+plotMA(resLFC, ylim = c(-7, 7), main="MA-plot With Shrinkage")
+
+```
+
+**Visual Evidence in MA Plots:**
+
+-   **Without Shrinkage:** The MA plot shows a larger number of genes with very high or very low LFC values, creating a "wider spread" in the vertical dimension. Genes with low counts might appear as having exaggerated fold changes due to noise.
+
+-   **With Shrinkage:** The MA plot on the other hand shows a narrower spread of LFC values, with fewer genes exhibiting extreme LFC values. This created a more "compressed" plot vertically, indicating that shrinkage has stabilized the LFC estimates.
+
+**MA Plot Insight:** The MA plot shows that while the count of significant genes (based on adjusted p-values) is consistent, the strength of their differential expression (as indicated by LFC) is moderated by shrinkage. This is why it's critical to consider both statistical outputs and visual diagnostics in RNA-seq analysis.
+
+The fact that the statistical summary shows no difference, but the MA plot indicates otherwise, suggests that the shrinkage procedure might still be affecting the data in a way that isn't fully captured by the summary statistics alone.
+
+**Possible Reasons for the Discrepancy:**
+
+Shrinkage methods, tend to pull extreme LFC values (those with high variability or low counts) towards zero, which reduces their apparent significance. Even though the overall count of significant genes (adjusted p-value \< 0.05) remains the same, the actual LFC values of individual genes might be substantially different. In other words, while the number of significant genes is unchanged, the effect sizes (i.e., the LFC values) of these genes have been adjusted.
+
+## 6. Annotating DESeq gene ids to reference human genome
+
+The remotes package is necessary for installing packages such as annotables directly from GitHub repositories
+
+```{r echo=FALSE}
+head(grch38) 
+```
+
+First convert result to dataframe
+
+```{r echo=TRUE, message=FALSE}
+res_df <- data.frame(res)
+
+```
+
+Annotate with the human genome genes
+
+```{r}
+res_df <- data.frame(res_df) %>%
+  rownames_to_column(var = "gene_id") %>%  # 'gene_id' is created from row names
+  left_join(grch38[, c("ensgene", "symbol", "biotype", "description")],
+            by = c("gene_id" = "ensgene"))  # Join using 'gene_id' and 'ensgene'
+
+```
+
+`rownames_to_column(var = "gene_id")`: This line converts the row names, which contain the Ensembl gene IDs, into a new column called `gene_id`. This step makes the Ensembl IDs accessible for annotation purposes.
+
+**Significant Genes Analysis Based on Selected Thresholds**
+
+log2 fold change greater than 1 in absolute value, means the expression changes are at least two-fold in either direction.
+
+```{r}
+res_sig <- subset(res_df, padj < 0.05 & abs(log2FoldChange) > 1 )%>%
+  arrange(padj)
+
+
+```
+
+**`abs(log2FoldChange) > 1`**: This helps to filter genes based on the log2 fold change (log2FC), which is a measure of the magnitude of change in gene expression between two conditions (e.g., treated vs. untreated). A log2 fold change of 1 corresponds to a fold change of about 1 (since `2^1 ≈ 2`). This means that the expression level of a gene is at least 2 times higher or lower in one treatment group compared to the other. The `abs()` function is used to take the absolute value, ensuring that both upregulated and downregulated genes are considered.
+
+A positive `log2FoldChange` indicates upregulation (higher expression in the treated group compared to the control (untreated)), while a negative `log2FoldChange` indicates downregulation (lower expression).
+
+## 7. Visualisation of Significant Genes
+
+**HEATMAP**
+
+Expression cluster by sample group with Heatmap using subsetted significant genes and normalized counts. The heatmap clusters genes and samples based on Euclidean distance between the expression values.
+
+```{r}
+#display.brewer.all()# to display color palette
+```
+
+```{r}
+sig_norm_gene <- norm_counts[res_sig$gene_id, ]
+heat_color <- brewer.pal(6, "YlOrRd" )
+pheatmap(sig_norm_gene,
+         color = heat_color,
+         cluster_rows = T,
+         show_rownames = F,
+         annotation = dplyr::select(sample_info, dex),
+         scale = "row") #Plots z-scores instead of the normalized values
+```
+
+As expected, samples from the same group are clustered together. Rows are clustered to show groups of genes with similar expression patterns. This clearly reveals patterns in gene expression data related to the groups under study.
+
+**Top 20 highly significant Genes between samples with threshold \>2**
+
+```{r}
+#Significant genes based on adjusted p-value < 0.05 and log2FC > 2
+DEGenes <- res_df[which(res_df$padj < 0.05 & abs(res_df$log2FoldChange) > 2), ]
+
+# Ordering by p-value to select the top 20 genes using log-transformed assay used above
+top_genes <- head(order(res$padj), 20)
+logCPM <- var_trans_matrix[top_genes, ]#log transforms the top genes
+
+# Scaling data for heatmap
+logCPM <- t(scale(t(logCPM)))
+
+col.pan <- colorRampPalette(brewer.pal(9, "RdBu"))(100)  # Generates a red-white-blue color palette
+
+# Plot the heatmap using pheatmap
+pheatmap(logCPM, 
+         color = col.pan,                   
+         cluster_rows = TRUE,               
+         cluster_cols = TRUE,              
+         scale = "none",                    
+         show_rownames = TRUE,              
+         show_colnames = TRUE,              
+         fontsize_row = 10,                 
+         fontsize_col = 12,                 
+         angle_col = 45,                    
+         border_color = NA,                 
+         main = "Heatmap of logCPM")
+```
+
+**VOLCANO PLOT**
+
+A column for different level of significance is first created for this
+
+```{r}
+res_df <- res_df%>%
+  #rownames_to_column(var = "gene_id")%>%
+  mutate(Significant_Genes = padj < 0.05)%>%
+  arrange(padj)
+  
+```
+
+```{r}
+#subsetting significant genes based on their signficant levels
+res_df$Significant_Genes <- "n.s."
+res_df$Significant_Genes[res_df$padj < 0.05 & res_df$log2FoldChange > 1] <- "up"
+res_df$Significant_Genes[res_df$padj < 0.05 & res_df$log2FoldChange < 1] <- "down"
+#ifelse(padj < 0.1 & abs(log2FoldChange) > 2 , as.character(symbol), NA))
+```
+
+`-log10(padj)` is used to visualize wide range in expression
+
+```{r}
+ggplot(res_df) +
+  geom_point(aes(x = log2FoldChange, y = -log10(padj), color = Significant_Genes)) +
+  scale_color_manual(values = c("n.s." = "grey", "up" = "red", "down" = "blue")) +  
+  ylim(0, 15) +
+  xlab("log2 fold change") +
+  ylab("-log10 adjusted p-value") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(size = rel(1.5), hjust = 0.5),
+    axis.title = element_text(size = rel(1.25))
+  )
+```
+
+**Volcano plot visualization of highly expressed genes labelled at threshold \> 2**
+
+Top 2000 genes based on this threshold is used
+
+```{r}
+top2000Genes <- res_df[1:2000, ]
+```
+
+```{r fig.height=8, fig.width=6}
+ggplot(top2000Genes) +
+  geom_point(aes(x = log2FoldChange, y = -log10(padj), color = Significant_Genes)) +
+  scale_color_manual(values = c("n.s." = "grey", "up" = "red", "down" = "blue")) +  # Define colors
+  ylim(0, 15) +
+  xlab("log2 fold change") +
+  ylab("-log10 adjusted p-value") +
+  theme_bw() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(size = rel(1.5), hjust = 0.5),
+    axis.title = element_text(size = rel(1.25))
+  ) +
+  geom_text(
+    data = subset(top2000Genes, padj < 0.05 & abs(log2FoldChange) > 2), #to label very highly expressed genes 
+    #Criteria for very significant genes
+    aes(x = log2FoldChange, y = -log10(padj), label = symbol),
+    vjust = -1,  # Adjusts vertical position of the label
+    hjust = 0.5, # Adjusts horizontal position of the label
+    size = 3,    # Size of the text label
+    color = "black"  # Color of the text label
+  )
+
+```
+
+**Visualisation of Expression Differences Between Samples**
+
+Using first 20 genes to further visualize how gene seperates between samples.
+
+```{r}
+#top 20 significant genes
+top_genes <- head(DEGenes, 20)
+
+top_normalized_counts <- norm_counts[top_genes$gene_id, ] # `norm_counts` is a matrix with row names matching gene IDs
+
+```
+
+```{r}
+# combining normalized counts with annotation
+top_genes_annotated <- data.frame(gene_id = top_genes$gene_id) %>%
+    left_join(grch38, by = c("gene_id" = "ensgene")) %>%
+    mutate(normalized_counts = top_normalized_counts)
+
+```
+
+```{r}
+# Convert to a long format for plotting
+top_genes_long <- as.data.frame(top_normalized_counts) %>%
+    rownames_to_column(var = "ensgene") 
+
+```
+
+**Merging with metadata so as to color by sample group**
+
+```{r}
+count_20_genes <- gather(top_genes_long, key = "samplename", value = "counts", 2:9)
+
+```
+
+```{r}
+count_20_genes <- inner_join(count_20_genes, sample_info, by = c("samplename" = "Run")) %>%
+    left_join(grch38, by = c("ensgene" = "ensgene"))
+#join by matching column content /common key
+```
+
+```{r fig.height=6}
+ggplot(count_20_genes) +
+  geom_point(aes(x = ensgene, y = counts, color = dex)) +
+  scale_y_log10() +
+  xlab("Genes") +
+  ylab("Normalized Counts") +
+  ggtitle("Top 20 Significant Genes") +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5), 
+    axis.text.x = element_text(angle = 45, hjust = 1)  # Adjust angle for diagonal text
+  )
+```
+
+From the output, most of the genes seperate out between samples. The plot indicates most of the Genes treated with Dexamethasone are upregulated.
+
+**Using Heatmap to visualize the same top 20 padj genes between samples**
+
+```{r  fig.width = 6, fig.height = 7}
+count_20_genes%>%
+  ggplot(aes(x = samplename, y = symbol, fill = log2(counts), label = round(log2(counts), digits = 1))) + 
+  #digit is changed to 1 decimal places instead of 2 to match with the specified one in the heatmap plot
+  
+  geom_tile(color = "black") +
+  geom_text() +
+  coord_cartesian(expand = FALSE) + #According to the error "the condition has length > 1". So expand was changed to False
+  
+  scale_fill_distiller(palette = "Blues", direction = 1, breaks = c(2.5, 7.5, 12.5)) + 
+  # The direction of the legend is set to 1 making the most expressed genes, the darkest. The range of legend is also changed from 6 to contain just 3 characters using breaks
+  
+  labs(x = "Sample", y = "Gene IDs", fill = "Counts (log2)") +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    legend.ticks = element_blank(),
+    title = element_text(size = 13),
+    axis.text = element_text(size = 11, colour = "black"),
+    axis.title = element_text(size = 15, face = "bold"),
+    panel.border = element_rect(linewidth = 3, fill = NA),
+    plot.title = element_text(hjust = 0.5), 
+    axis.text.x = element_text(angle = 45, hjust = 1)  # Adjust angle for diagonal text
+) 
+```
+
+## 8. Functional Enrichment and Ontology Analysis
+
+GO enrichment analysis identifies over-represented Gene Ontology (GO) terms among a list of genes compared to a background set (such as all genes in the genome). GO terms are standardized annotations describing the roles of genes and gene products.
+
+KEGG pathway enrichment analysis identifies over-represented pathways among a list of genes using the Kyoto Encyclopedia of Genes and Genomes (KEGG) database. KEGG is a curated resource that links genes and proteins to metabolic pathways, molecular interactions, and disease processes.
+
+They both aim to identify over-represented biological themes, but they do so in different ways and with different focuses
+
+Leveraging packages like ClusterProfiler, org.Hs.eg.db, and AnnotationDbi for functional enrichment and gene ontology analysis.
+
+```{r}
+# Filtering significant genes for further analysis
+res_sig1 <- res_df[which(res_df$padj < 0.05 & abs(res_df$log2FoldChange) > 2), ]
+
+```
+
+```{r}
+entrez_ids <- mapIds(org.Hs.eg.db,
+                     keys = res_sig1$gene_id,
+                     column = "ENTREZID",
+                     keytype = "ENSEMBL",
+                     multiVals = "first")
+
+# Remove NAs from mapping
+entrez_ids <- na.omit(entrez_ids)
+# Convert to a character vector (as required by enrichKEGG)
+entrez_ids <- as.character(entrez_ids)
+```
+
+1.  **Gene Ontology (GO) Enrichment Analysis**:
+
+**Important Parameters**
+
+The q-value is an adjusted p-value used in multiple hypothesis testing to control the false discovery rate (FDR). It is calculated using methods like the Benjamini-Hochberg procedure, which ranks p-values and adjusts them to account for multiple comparisons. Unlike the p-value, which reflects the chance of observing a result under the null hypothesis, the q-value adjusts for multiple testing, estimating the proportion of false positives among significant results.
+
+**Lower q-values indicate stronger evidence against the null hypothesis after correcting for multiple testing indicating an acceptable FDR level.**
+
+```{r}
+go_enrichment <- enrichGO(gene = entrez_ids,
+                          OrgDb = org.Hs.eg.db,
+                          keyType = "ENTREZID",
+                          ont = "ALL",  # "BP", "MF", or "CC" can also be selected 
+                          pAdjustMethod = "BH", #Benjamin Hochberg's false positive adjustment method
+                          qvalueCutoff = 0.05)
+
+```
+
+The `ont` parameter in the `enrichGO()` function of the clusterProfiler package specifies the Gene Ontology (GO) category for enrichment analysis. The options are:
+
+-   **BP (Biological Process)**: Refers to broad biological goals like cell cycle, metabolism, or immune response.
+
+-   **MF (Molecular Function)**: Focuses on the specific biochemical activities of gene products, such as binding or catalysis.
+
+-   **CC (Cellular Component)**: Describes where in the cell a gene product functions, like the nucleus or plasma membrane.
+
+-   **ALL**: Combines all three categories (BP, MF, and CC) for a comprehensive analysis of gene functions, processes, and locations.
+
+```{r echo=TRUE}
+head(go_enrichment)
+
+```
+
+The output lists Gene Ontology (GO) terms or pathways significantly enriched in the gene list, all falling under biological processes.
+
+-   **Gene Ratio**: The proportion of genes in the input list associated with a specific GO term, indicating how common a function/pathway is among the selected genes.
+
+-   **Bg Ratio (Background Ratio)**: The proportion of genes associated with a GO term in the entire background set, showing its prevalence across all genes.
+
+-   **p-value**: Indicates the likelihood that the enrichment occurred by chance, with lower values being more significant.
+
+-   **Adjusted p-value (FDR/q-value)**: Corrects for multiple comparisons to control the false discovery rate.
+
+-   **Count**: The number of genes from the input list associated with a specific GO term, reflecting the size of the enrichment impact.
+
+2.  **KEGG Analysis**
+
+```{r}
+# Perform KEGG enrichment analysis
+kegg_enrichment <- enrichKEGG(gene = entrez_ids,
+                              organism = "hsa",  # "hsa" for Homo sapiens
+                              pAdjustMethod = "BH",
+                              qvalueCutoff = 0.05)
+
+
+```
+
+### 9. Visualization with Dot plot and Bar Plot
+
+A dot plot visually represents Gene Ontology (GO) enrichment results, showing enriched GO terms and their significance and impact on the gene set.
+
+-   **X-Axis**: Shows the gene ratio or count, indicating the proportion of input genes associated with each GO term.
+
+-   **Y-Axis**: Lists significantly enriched GO terms, usually sorted by significance.
+
+-   **Dot Size**: Reflects the number of genes associated with each GO term, with larger dots indicating more genes involved.
+
+-   **Dot Color**: Represents the adjusted p-value (q-value), where darker colors indicate stronger enrichment and higher significance.
+
+```{r fig.height=8, fig.width=10}
+dotplot(go_enrichment,  showCategory = 20) +
+    ggtitle("GO Enrichment Analysis")
+
+```
+
+**What to Look Out For**:
+
+-   Higher gene ratios suggest that a larger fraction of the input genes are involved in the biological process, function, or component represented by the GO term.
+
+-   Larger dots show that more genes are associated with that GO term, suggesting a potentially more impactful role of that term in the biological context.
+
+**Bar Plot for KEGG Enrichment Results**
+
+**What It Represents**:\
+A bar plot is used to represent the Kyoto Encyclopedia of Genes and Genomes (KEGG) pathway enrichment results, showing which pathways are over-represented in the gene set compared to the whole genome.
+
+**Key Components of a Bar Plot**:
+
+-   **X-Axis**: The KEGG pathway terms or names. Each bar corresponds to a specific pathway, such as "Apoptosis," , "Metabolic pathways." or "MAPK signaling pathway"
+
+-   **Y-Axis**: Represents the significance level. Higher bars indicate more significant enrichment.
+
+-   **Bar Height**: Represents the significance of the pathway enrichment. longer bars mean lower p-values and hence higher statistical significance.
+
+-   **Bar Color**: Represent the count of genes involved in each pathway or to indicate another dimension like gene ratio. Colors can help distinguish different pathways visually or highlight those with the most significant enrichment.
+
+```{r}
+barplot(kegg_enrichment, showCategory = 20) +
+    ggtitle("KEGG Pathway Enrichment Analysis")
+
+```
+
+**What to Look Out For**:
+
+-   Pathways with higher/longer bars represent more statistically significant enrichment. These pathways are less likely to have been identified by chance. Theses pathways are biologically relevant to research question. For example, in cancer studies, pathways related to cell cycle, apoptosis, and DNA repair are often significant.
+
+### **REFERENCES**
+
+1.  Hamid D. Ismail (2023). Title: Bioinformatics : a practical guide to next generation sequencing data analysis.
+2.  RNA-Seq with Bioconductor in R- Datacamp course by Mary Piper. Harvard T.H. Chan School of Public Health
