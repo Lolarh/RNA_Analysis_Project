@@ -558,7 +558,7 @@ From the output, most of the genes seperate out between samples. The plot indica
 
 **Using Heatmap to visualize the same top 20 padj genes between samples**
 
-```{r  fig.width = 6, fig.height = 7}
+```{r  fig.width = 6, fig.height = 8}
 count_20_genes%>%
   ggplot(aes(x = samplename, y = symbol, fill = log2(counts), label = round(log2(counts), digits = 1))) + 
   #digit is changed to 1 decimal places instead of 2 to match with the specified one in the heatmap plot
