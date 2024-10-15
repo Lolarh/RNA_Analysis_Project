@@ -2,6 +2,10 @@
 
 This project demonstrates RNA-seq analysis using the **Airway dataset**, focusing on differential gene expression (DGE) analysis. The dataset involves human airway smooth muscle cells treated with the glucocorticoid drug **Dexamethasone** and includes gene expression measurements for both treated and untreated conditions.
 
+The analysis was performed in R, and the detailed results, visualizations, and explanations are available in the following HTML report:
+
+[View the full RNA-Seq Analysis Report](https://lolarh.github.io/RNA_Analysis_Project/Airway_RNA_Seq.html)
+
 ## About the Airway Data
 
 The **Airway** dataset is a `RangedSummarizedExperiment` object, containing:
