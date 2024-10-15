@@ -1,83 +1,49 @@
-## About Airway Data
+# RNA Differential Gene Expression Analysis with Airway Dataset
 
-Airway data is a RangedSummarizedExperiment object containing count data and sample information. It consists of RNA-seq data from human airway smooth muscle cells. These cells were treated with a glucocorticoid drug called Dexamethasone, commonly used for its anti-inflammatory effects. The dataset contains measurements of gene expression levels under two conditions: treated and untreated with Dexamethasone.
+This project demonstrates RNA-seq analysis using the **Airway dataset**, focusing on differential gene expression (DGE) analysis. The dataset involves human airway smooth muscle cells treated with the glucocorticoid drug **Dexamethasone** and includes gene expression measurements for both treated and untreated conditions.
 
-*rowData(airway):*
+## About the Airway Data
 
-This function retrieves the metadata associated with each row (typically representing genes) in the airwaydataset. This metadata might include gene identifiers, gene symbols, annotations, and other relevant information about each feature (e.g., genes or transcripts) in the dataset.
+The **Airway** dataset is a `RangedSummarizedExperiment` object, containing:
+- **Count data**: Raw RNA-seq read counts.
+- **Sample information**: Metadata about the samples, including treatment conditions.
 
-Essentially, rowData(airway) provides descriptive information about the rows of the dataset.
+### Key Functions:
+- **`rowData(airway)`**: Retrieves metadata (e.g., gene identifiers) for each row (gene) in the dataset.
+- **`assay(airway)`**: Accesses the matrix of gene expression levels (counts) for each sample.
 
-*assay(airway):*
+## Differential Gene Expression Analysis Workflow
 
-This function accesses the actual expression data matrix from the airway dataset. In this matrix, rows correspond to features (such as genes), and columns correspond to samples. Each cell in this matrix contains the expression level (e.g., counts) of a particular gene in a particular sample.
+### Step 1: Creating DESeq Object
+- **`DESeqDataSet`**: Used to create an object from the `SummarizedExperiment`.
+- **`DESeqDataSetFromMatrix`**: Used if raw counts are in matrix form.
 
-In other words, assay(airway) provides the numerical data of gene expression levels measured across different samples.
+### Step 2: Normalization
+Normalization ensures counts can be compared across samples using **size factors**, calculated using the median-of-ratios method:
+- Geometric mean of counts across samples.
+- Ratio of gene counts to geometric mean.
+- Median of these ratios becomes the **size factor**.
 
-## Differential Gene Analysis Preparation
+## Quality Control and Visual Exploration
 
-*Step 1: Creating DESeq Object*
+### 1. Hierarchical Clustering and Heatmaps
+- **Regularized Log Transformation (rlog)** and **Variance Stabilizing Transformation (VST)** are used to stabilize variance, improving clustering visuals.
 
-DESeqDataSet is mostly used to create this object because the raw count is a Summarized Experiment. If otherwise, DESeqDataSetFromMatrix is used
-
-*Step 2: Normalization*
-
-Normalization ensures counts can be compared across samples. DESeq2 automatically computes size factors, representing the total number of reads per sample, and scales the counts accordingly.
-
-Size Factor Calculation
-
-The size factor is computed using the median-of-ratios method:
-
-Geometric Mean Calculation: For each gene, the geometric mean of its counts across all samples is calculated.
-
-Ratio Calculation: Each gene’s count in a sample is divided by its geometric mean.
-
-Median-of-Ratios: The median of these ratios for each sample becomes the size factor.
-
-Normalization: Raw counts are divided by their size factors, making them comparable across samples.
-
-## Quality Control and Visual Exploration of Samples using PCA and Correlation Heatmap
-
-#### Unsupervised Hierachical Clustering with heatmap using Regularized Log Transformation or Variance Stabilizing Transformation
-For unsupervised clustering, it's common to use transformed data to stabilize variance and make the data more suitable for clustering. Two common transformations are regularized log (rlog) and variance stabilizing transformation (VST), a log transformation that moderates the variance across the mean. This helps to improve the visuals of the clustering.
-
-#### Principal Component Analysis Plot
-PCA is performed to see how the samples cluster and whether the condition of interest corresponds with the principal components explaining the most variation in the data.
+### 2. Principal Component Analysis (PCA)
+- **PCA** helps visualize sample clustering, showing whether experimental conditions (e.g., treated vs. untreated) align with major components of variation.
 
 ## Differential Expression Analysis
 
-**Dispersion Estimate and Model Fitting**
+### Dispersion Estimates and Model Fitting
+- **Normalized counts** are used to model the relationship between mean expression levels and dispersion.
+- **Local regression** fits a curve to plot dispersion estimates across mean counts, shrinking estimates toward the trend for better accuracy.
 
-How well does the data fit to the Model?
+### Log Fold Changes (logFC)
+- **Log Fold Change** measures the change in gene expression between two conditions (e.g., treated vs. untreated).
+  - **Positive logFC**: Upregulation.
+  - **Negative logFC**: Downregulation.
+  - **Zero logFC**: No change.
 
-The normalized counts (adjusted by size factors) are used in the dispersion modeling. DESeq2 fits a model to the relationship between mean normalized counts and dispersion. The fitting process involves using a relationship between the mean expression level and the dispersion.
+### MA Plot
+- **MA Plot** visualizes log fold changes (M) vs. average expression (A), showing up- or down-regulated genes based on their distance from the horizontal line.
 
-Local Regression: A smooth curve (trend line) is fitted to the plot of mean normalized counts vs. dispersion estimates for each gene. This curve represents the expected dispersion at different mean expression levels.
-
-Shrunken Estimates: For each gene, an individual dispersion estimate is shrunk towards the trend line, balancing gene-specific information and the overall trend observed across all genes.
-
-**LOG-FOLD CHANGES**
-
-What is Log Fold Change and why is it used?
-
-Log fold change (logFC) is a commonly used metric in biological and statistical analyses, especially in the context of gene expression studies like RNA-Seq. It quantifies the change in expression levels of a gene between two conditions, such as treated versus untreated, diseased versus healthy, or any other experimental comparison.
-
-What is Fold Change (FC)
-
-Fold change is the ratio of expression levels between two conditions. For example, if a gene has an expression level of 200 in Condition A and 100 in Condition B, the fold change is 200/100 = 2. This means the gene's expression is twice as high in Condition A as in Condition B. To make the scale of change easier to interpret and to handle a wide range of values (including very small values), the fold change is often transformed using the logarithm (commonly base 2).
-
-**Important Interpretations:**
-
-Positive values indicate upregulation (higher expression in the first condition).
-
-Negative values indicate downregulation (lower expression in the first condition).
-
-Zero indicates no change.
-
-MA PLOT to visualize log fold change with and without shrinkage
-
-MA Plot is a plot of the log2 fold change (M) vs. the average expression (A) for each gene. Interpretation: Points above or below the horizontal line indicate up-regulated or down-regulated genes, respectively. The further from the line, the greater the change in expression.
-
-M stands for the log ratio (or "fold change") of expression between two conditions (e.g., treated vs. control).
-
-A stands for the average expression (or the mean) of counts for a gene across the two conditions. The plot is typically created after performing differential expression analysis, where each point represents a gene
